@@ -1,4 +1,3 @@
-
 library(forecast)
 library(xts)
 library(zoo)
@@ -17,7 +16,7 @@ library(readxl)
 library(dplyr) 
 
 ##Change directory containing files
-setwd("C:/Users/MDMC (Workshop)/Documents/Notification/Diagnosed/")
+setwd("/Volumes/T7/Notification/Diagnosed/")
 
 Jan_22 <- read_excel("NotificationRegister_2022_January_notification_date.xlsx")
 colnames(Jan_22) <- Jan_22[5, ] ##Change the column name
@@ -93,7 +92,7 @@ Dec_22$Month <- "December"
 
 data <- rbind(Jan_22,Feb_22,Mar_22,Apr_22,May_22,Jun_22,Jul_22,Aug_22,Sep_22,Oct_22,Nov_22,Dec_22)
 ####Loading the spatial file with coordinates####
-setwd("C:/Users/MDMC (Workshop)/Documents/")
+setwd("/Volumes/T7/")
 INDIA <- readRDS('gadm36_IND_2_sf.rds') #shapefile 
 MH_sp  <- subset(INDIA, NAME_1=="Maharashtra") ##Filter out the data from Maharashtra
 
@@ -105,7 +104,7 @@ MH_sp  <- subset(INDIA, NAME_1=="Maharashtra") ##Filter out the data from Mahara
 #died  <- subset(data, Spectrum_Current_State == "Maharashtra") ##Filter out the data from Maharashtra
 
 ####Loading the population data of all the 36 districts in Maharashtra (2017-2022)####
-pop <- read_excel("C:/Users/MDMC (Workshop)/Documents/population.xlsx")
+pop <- read_excel("population.xlsx")
 data  <- subset(data, Spectrum_Current_State == "Maharashtra") ##Filter out the data from Maharashtra
 
 ####Data Preprocessing####
@@ -139,7 +138,11 @@ summary_data <- data %>%
   summarise(
     total_cases = n(),
     Treated = sum(Treatment_Outcome == "CURED" | Treatment_Outcome == "TREATMENT_COMPLETE" , na.rm = TRUE),
-    Diabetes = sum(Status_of_Diabetes == "Non-diabetic", na.rm = TRUE)
+    Diabetes = sum(Status_of_Diabetes == "Diabetic", na.rm = TRUE),
+    Non_diabetes = sum(Status_of_Diabetes == "Non-diabetic", na.rm = TRUE),
+    Reactive = sum(Status_of_HIV == "Reactive", na.rm = TRUE),
+    Non_reactive = sum(Status_of_HIV == "Non-Reactive", na.rm = TRUE),
+    Positive = sum(Status_of_HIV == "Positive", na.rm = TRUE)
   )
 
 summary_data <- summary_data %>% mutate(cases_per_capita = total_cases/pop$population_2022)
@@ -151,22 +154,80 @@ centroids_coords <- st_coordinates(centroids)
 
 
 #summary_data2 <- data %>%
- # group_by(District, Status_of_Diabetes) %>%
-  #summarise(count = n()) %>%
-  #ungroup()
+# group_by(District, Status_of_Diabetes) %>%
+#summarise(count = n()) %>%
+#ungroup()
 
 #merged_data2 <- merge(MH_sp,summary_data2, by = "District")
+  
+  
+  max_count <- max(c(merged_data$Diabetes, merged_data$Non_diabetes))
 
-
-ggplot(data = merged_data) +
+map1 <- ggplot(data = merged_data) +
   geom_sf(aes(fill = cases_per_capita), color = "white") +  # Choropleth
-  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+
+  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+  
   geom_point(data = merged_data,
              aes(x = centroids_coords[,1], y = centroids_coords[,2], size = Diabetes), color = "orange",
              alpha = 0.6) +# Bubble plot
-  scale_size_continuous(name = "count") +
+  scale_size_continuous(range = c(3, 12), limits = c(0, max_count)) +
+  #scale_color_manual(values = c("green"), name = "Diabetes Status") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+map2 <- ggplot(data = merged_data) +
+  geom_sf(aes(fill = cases_per_capita), color = "white") +  # Choropleth
+  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+  
+  geom_point(data = merged_data,
+             aes(x = centroids_coords[,1], y = centroids_coords[,2], size = Non_diabetes), color = "purple",
+             alpha = 0.6) +# Bubble plot
+  scale_size_continuous(range = c(3, 12), limits = c(0, max_count)) +
   #scale_color_manual(values = c("green"), name = "Diabetes Status") +
   theme_minimal() +
   theme(legend.position = "right")
 
 
+# Display the maps side-by-side
+library(gridExtra)
+grid.arrange(map1, map2, ncol = 2)
+
+
+max_count <- max(c(merged_data$Reactive, merged_data$Non_reactive,merged_data$Positive))
+
+map3 <- ggplot(data = merged_data) +
+  geom_sf(aes(fill = cases_per_capita), color = "white") +  # Choropleth
+  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+  
+  geom_point(data = merged_data,
+             aes(x = centroids_coords[,1], y = centroids_coords[,2], size = Reactive), color = "pink",
+             alpha = 0.6) +# Bubble plot
+  scale_size_continuous(range = c(3, 12), limits = c(0, max_count)) +
+  #scale_color_manual(values = c("green"), name = "Diabetes Status") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+map4 <- ggplot(data = merged_data) +
+  geom_sf(aes(fill = cases_per_capita), color = "white") +  # Choropleth
+  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+  
+  geom_point(data = merged_data,
+             aes(x = centroids_coords[,1], y = centroids_coords[,2], size = Non_reactive), color = "orange",
+             alpha = 0.6) +# Bubble plot
+  scale_size_continuous(range = c(3, 12), limits = c(0, max_count)) +
+  #scale_color_manual(values = c("green"), name = "Diabetes Status") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+map5 <- ggplot(data = merged_data) +
+  geom_sf(aes(fill = cases_per_capita), color = "white") +  # Choropleth
+  scale_fill_gradient(low = "lightblue", high = "red", name = "TB Infection")+  
+  geom_point(data = merged_data,
+             aes(x = centroids_coords[,1], y = centroids_coords[,2], size = Positive), color = "green",
+             alpha = 0.6) +# Bubble plot
+  scale_size_continuous(range = c(3, 12), limits = c(0, max_count)) +
+  #scale_color_manual(values = c("green"), name = "Diabetes Status") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+
+# Display the maps side-by-side
+library(gridExtra)
+grid.arrange(map3, map4, map5, ncol = 3)
+  
