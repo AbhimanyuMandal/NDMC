@@ -208,3 +208,140 @@ animated_map <- ggplot(district_map) +
   ease_aes('cubic-in-out')
 animate(animated_map, width=800,height=700, renderer=gifski_renderer())
 anim_save("TB_incidence_rate_animation_check.gif")
+
+
+
+
+
+#######################################################################################################################################################################
+
+data <- read.csv("Maharashtra_Notification_Cleaned_Imputed_Final.csv")
+data  <- subset(data, Spectrum_Residence_State == "Maharashtra") ##Filter out the data from Maharashtra
+INDIA <- readRDS('gadm36_IND_2_sf.rds') #shapefile 
+MH_sp  <- subset(INDIA, NAME_1=="Maharashtra") ##Filter out the data from Maharashtra
+pop <- read_excel("population.xlsx")
+
+####Data Preprocessing####
+N1=length(unique(data$Spectrum_Residence_District)) ##number of districts before cleaning
+data$Spectrum_Residence_District <- gsub("^Mumbai.*", "Mumbai Suburban", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub(".*MC$", "Mumbai City", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("Pune Rural", "Pune", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("PUNE RURAL", "Pune", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("LATUR", "Latur", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("CHANDRAPUR", "Chandrapur", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("PARBHANI", "Parbhani", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("SINDHUDURG", "Sindhudurg", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("NAGPUR", "Nagpur", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("JALNA", "Jalna", data$Spectrum_Residence_District)
+data$Spectrum_Residence_District <- gsub("NANDED", "Nanded", data$Spectrum_Residence_District)
+
+MH_sp$NAME_2 <- gsub("Bid", "Beed", MH_sp$NAME_2)
+MH_sp$NAME_2 <- gsub("Garhchiroli", "Gadchiroli", MH_sp$NAME_2)
+MH_sp$NAME_2 <- gsub("Raigarh", "Raigad", MH_sp$NAME_2)
+MH_sp$NAME_2 <- gsub("Aurangabad","Chhatrapati Sambhajinagar", MH_sp$NAME_2)
+MH_sp$NAME_2 <- gsub("Osmanabad","Dharashiv", MH_sp$NAME_2)
+pop$District <- gsub("Osmanabad","Dharashiv", pop$District)
+
+N1=length(unique(data$Spectrum_Residence_District)) ##number of districts after cleaning (~36)
+
+####Ensure same column name for districts in both the files####
+names(MH_sp)[names(MH_sp) == "NAME_2"] <- "District"
+names(data)[names(data) == "Spectrum_Residence_District"] <- "District"
+
+population <- pop %>% 
+  pivot_longer(
+    cols = starts_with("population_"),         # Selects population columns
+    names_to = "Year",                          # New column name for years
+    names_prefix = "population_",               # Removes the prefix "population_" from the year column
+    values_to = "Population"
+  )
+population$Year <- as.numeric(population$Year)
+
+summary <- data %>%
+  group_by(District, Year) %>%
+  summarize(
+    total_cases = n(),
+    Treated = sum(Treatment_Outcome == "CURED" | Treatment_Outcome == "TREATMENT_COMPLETE" , na.rm = TRUE),
+    Diabetic_status = sum(Status_of_Diabetes == "Diabetic", na.rm = TRUE),
+    Non_diabetic_status = sum(Status_of_Diabetes == "Non-diabetic", na.rm = TRUE),
+    Reactive = sum(Status_of_HIV == "Reactive", na.rm = TRUE),
+    Non_reactive = sum(Status_of_HIV == "Non-Reactive", na.rm = TRUE),
+    Positive = sum(Status_of_HIV == "Positive", na.rm = TRUE)
+  ) %>%
+  arrange(District, Year)
+
+
+tb_incidence <- summary %>%
+  inner_join(population, by = c("District", "Year")) %>%
+  mutate(incidence_rate = (total_cases / Population) * 100000) %>%
+  dplyr::select(District, Year, incidence_rate)
+
+district_map <- MH_sp %>%
+  left_join(tb_incidence, by = "District")
+
+####Extract the coordinates for each district in Maharashtra####
+centroids <- st_centroid(MH_sp[1]$geometry)
+centroids_coords <- st_coordinates(centroids)
+
+merged_data1 <- district_map %>% filter(District != "Mumbai Suburban")
+merged_data1 <- merged_data1 %>% filter(District != "Mumbai City")
+
+merged_data <- merged_data1 %>% filter(Year == 2024)
+
+# Create neighbor list based on spatial contiguity (using queen criterion)
+neighbors <- poly2nb(merged_data)
+
+# Create spatial weights matrix from neighbors
+weights <- nb2listw(neighbors, style = "W", zero.policy = TRUE)
+
+# Run Moran's I test for global spatial autocorrelation
+global_moran <- moran.test(merged_data$incidence_rate, weights, zero.policy = TRUE)
+
+# Run Local Moran's I (LISA)
+local_moran <- localmoran(merged_data$incidence_rate, weights, zero.policy = TRUE)
+
+# Append LISA results to the merged data
+merged_data$local_moran_I <- local_moran[, 1]  # Local Moran's I values
+merged_data$p_value <- local_moran[, 5]  # P-values of the local test
+
+# Quadrants for Local Moran's I
+merged_data$quadrant <- NA
+mean_cases <- mean(merged_data$incidence_rate, na.rm = TRUE)
+
+for (i in 1:nrow(merged_data)) {
+  if (merged_data$incidence_rate[i] > mean_cases & local_moran[i, 1] > 0) {
+    merged_data$quadrant[i] <- "High-High"
+  } else if (merged_data$incidence_rate[i] > mean_cases & local_moran[i, 1] < 0) {
+    merged_data$quadrant[i] <- "High-Low"
+  } else if (merged_data$incidence_rate[i] < mean_cases & local_moran[i, 1] > 0) {
+    merged_data$quadrant[i] <- "Low-Low"
+  } else if (merged_data$incidence_rate[i] < mean_cases & local_moran[i, 1] < 0) {
+    merged_data$quadrant[i] <- "Low-High"
+  }
+}
+
+# Filter for significant p-values
+merged_data$significant_cluster <- ifelse(merged_data$p_value < 0.05, merged_data$quadrant, NA)
+
+library(tmap)
+
+# Plot significant clusters
+tm_shape(merged_data) +
+  tm_polygons("significant_cluster", 
+              palette = c("red", "blue", "purple", "green"),
+              title = "Significant LISA Clusters (p < 0.05)",
+              textNA = "Not Significant") +
+  tm_layout(legend.outside = TRUE)
+
+
+
+library(ggplot2)
+ggplot(district_map %>% filter(Year == 2023)) +
+  geom_sf(aes(fill = incidence_rate)) +
+  geom_text(aes(x = centroids_coords[,1], y = centroids_coords[,2], label = MH_sp$District), size = 2.3)+
+  scale_fill_gradient(low = "yellow", high = "red", name = "Incidence", limits = c(0, 220)) +
+  labs(title = "TB Incidence Rate by District", subtitle = "Year: 2023") +
+  theme_minimal()
+
+
+
