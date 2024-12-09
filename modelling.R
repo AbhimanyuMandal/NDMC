@@ -15,7 +15,7 @@ library(sf)
 library(readxl)
 library(dplyr)
 library(CARBayes)
-install.packages("INLA", repos = "https://inla.r-inla-download.org/R/stable", dep = TRUE)
+#install.packages("INLA", repos = "https://inla.r-inla-download.org/R/stable", dep = TRUE)
 library(INLA)       # For Bayesian inference using INLA
 
 #Import the cleaned data
@@ -73,14 +73,56 @@ summary_data <- data %>%
 merged_data <- merge(MH_sp,pop,by="District")
 merged_data <- merge(merged_data,summary_data,by="District")
 
-merged_data_sp <- as(merged_data, "Spatial")
+population <- pop %>% 
+  pivot_longer(
+    cols = starts_with("population_"),         # Selects population columns
+    names_to = "Year",                          # New column name for years
+    names_prefix = "population_",               # Removes the prefix "population_" from the year column
+    values_to = "Population"
+  )
+population$Year <- as.numeric(population$Year)
+
+summary <- data %>%
+  group_by(District, Year) %>%
+  summarize(
+    incidence = n(),
+    Treated = sum(Treatment_Outcome == "CURED" | Treatment_Outcome == "TREATMENT_COMPLETE" , na.rm = TRUE),
+    Nontreated = sum(Treatment_Outcome == "DIED" , na.rm = TRUE),
+    Diabetic_status = sum(Status_of_Diabetes == "Diabetic", na.rm = TRUE),
+    Non_diabetic_status = sum(Status_of_Diabetes == "Non-diabetic", na.rm = TRUE),
+    Reactive = sum(Status_of_HIV == "Reactive", na.rm = TRUE),
+    Non_reactive = sum(Status_of_HIV == "Non-Reactive", na.rm = TRUE),
+    Positive = sum(Status_of_HIV == "Positive", na.rm = TRUE)
+  ) %>%
+  arrange(District, Year)
+
+
+tb_summary <- summary %>%
+  inner_join(population, by = c("District", "Year")) %>%
+  mutate(incidence_rate = (incidence / Population) * 100000) %>%
+  mutate(mortality_rate = (Nontreated / Population) * 100000) %>%
+  mutate(mortality_rate_frac = (Nontreated / incidence)*100) %>%
+  mutate(diabetic_rate = (Diabetic_status/Population)*100000) %>% 
+  mutate(diabetic_rate_frac = (Diabetic_status/incidence)) %>%
+  mutate(non_diabetic_rate = (Non_diabetic_status/Population)*100000) %>% 
+  mutate(non_diabetic_rate_frac = (Non_diabetic_status/incidence)) 
+
+district_map <- MH_sp %>%
+  left_join(tb_summary, by = "District")
+
+district_map <- district_map %>%
+  mutate(mortality_rate_frac = round(mortality_rate_frac, 2))
+
+
+
+merged_data_sp <- as(district_map, "Spatial")
 
 # Create an adjacency matrix using spatial contiguity
 neighbors <- poly2nb(merged_data_sp)
 W <- nb2mat(neighbors, style = "B", zero.policy = TRUE)
 
 
-car_model <- S.CARbym(formula = Treated ~ offset(log(total_cases)),
+car_model <- S.CARbym(formula = Nontreated ~ offset(log(incidence_rate)),
                       family = "poisson",
                       data = merged_data_sp@data,
                       W = W,
@@ -89,8 +131,8 @@ car_model <- S.CARbym(formula = Treated ~ offset(log(total_cases)),
 summary(car_model)
 #View(car_model)
 
-merged_data$posterior_risk <- car_model$summary.results[, "Mean"]
-plot(merged_data["posterior_risk"])
+district_map$posterior_risk <- car_model$summary.results[, "Mean"]
+plot(district_map["posterior_risk"])
 
 
 
